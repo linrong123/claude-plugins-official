@@ -1174,16 +1174,21 @@ def handle_commit_review_posttooluse(input_data):
     resolved = 0
     for sha in shas:
         try:
+            # core.quotePath=false: emit raw UTF-8 in `diff --git a/... b/...`
+            # headers so non-ASCII paths aren't C-quoted past the downstream
+            # parse_diff_into_files regex (sibling of #2056 / #2075). See #2082.
             if pre_amend_sha:
                 # Delta review: pre-amend → post-amend. `git diff` (not show)
                 # so the output is a pure unified diff with no commit header.
                 result = subprocess.run(
-                    [*GIT_CMD, "diff", "--no-color", "--no-ext-diff", pre_amend_sha, sha, "--"],
+                    [*GIT_CMD, "-c", "core.quotePath=false",
+                     "diff", "--no-color", "--no-ext-diff", pre_amend_sha, sha, "--"],
                     cwd=repo_root, capture_output=True, timeout=15
                 )
             else:
                 result = subprocess.run(
-                    [*GIT_CMD, "show", "-p", "--no-color", "--no-ext-diff", sha, "--"],
+                    [*GIT_CMD, "-c", "core.quotePath=false",
+                     "show", "-p", "--no-color", "--no-ext-diff", sha, "--"],
                     cwd=repo_root, capture_output=True, timeout=15
                 )
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:

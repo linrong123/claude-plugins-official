@@ -199,8 +199,15 @@ def _git_diff_range(repo_root, base, head="HEAD"):
     them reviewed — otherwise unreviewed commits get permanently silenced.
     """
     try:
+        # core.quotePath=false makes git emit raw UTF-8 in `diff --git a/... b/...`
+        # headers instead of C-quoting non-ASCII path bytes (`"a/\303\201vila/..."`
+        # vs `a/Ávila/...`). The downstream `re.match(r'^a/(.+?) b/(.+)$', ...)`
+        # in parse_diff_into_files / extract_file_paths_from_diff matches the
+        # raw form only — quoted headers slip past and the entire file is
+        # silently dropped from review. See #2082 (sibling of #2056 / #2075).
         r = subprocess.run(
-            [*GIT_CMD, "diff", "-p", "--no-color", "--no-ext-diff", base, head],
+            [*GIT_CMD, "-c", "core.quotePath=false",
+             "diff", "-p", "--no-color", "--no-ext-diff", base, head],
             cwd=repo_root, capture_output=True, timeout=30,
         )
         if r.returncode != 0:
@@ -436,7 +443,11 @@ def get_git_diff(cwd, baseline_sha, full_context=False, paths=None, untracked_pa
         # change exists to fix.
         return ""
 
-    cmd = [*GIT_CMD, "diff", "--no-color", "--no-ext-diff", baseline_sha] + (["--unified=99999"] if full_context else []) + pathspec
+    # core.quotePath=false: emit raw UTF-8 in `diff --git a/... b/...` headers
+    # so non-ASCII paths aren't C-quoted past the downstream parse_diff_into_files
+    # regex. See #2082 (sibling of #2056 / #2075).
+    cmd = [*GIT_CMD, "-c", "core.quotePath=false",
+           "diff", "--no-color", "--no-ext-diff", baseline_sha] + (["--unified=99999"] if full_context else []) + pathspec
     try:
         with _temp_index(cwd, untracked_paths) as env:
             # env is None when no index could be found (bare repo / not a
