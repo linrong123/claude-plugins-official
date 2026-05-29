@@ -64,8 +64,11 @@ jobs:
       # pr_url} entries emitted by the composite action when pr-mode is
       # per-entry. All three (scan / check / validate) are required on main and
       # none fire on the GITHUB_TOKEN-opened PR, so each must be dispatched.
-      # A single failed dispatch (transient API error) must not strand the
-      # remaining branches, so failures are logged as warnings, not fatal.
+      # A single failed dispatch (transient API error / rate limit) must not
+      # strand the remaining branches, so we attempt every dispatch, then fail
+      # the step if any failed: a missing required check would otherwise leave
+      # its bump PR silently blocked behind a green run, and the composite
+      # action skips slugs with an open PR so it would never be retried.
       - name: Dispatch required checks per per-entry PR
         if: steps.bump.outputs.pr-urls != '' && steps.bump.outputs.pr-urls != '[]'
         env:
@@ -73,12 +76,19 @@ jobs:
           PR_URLS: ${{ steps.bump.outputs.pr-urls }}
         run: |
           set -euo pipefail
+          dispatch_failures="$(mktemp)"
           jq -c '.[]' <<<"$PR_URLS" | while read -r entry; do
             branch=$(jq -r '.branch' <<<"$entry")
             name=$(jq -r '.name' <<<"$entry")
             for wf in scan-plugins check-mcp-urls validate-plugins; do
               echo "Dispatching ${wf}.yml against $branch ($name)"
-              gh workflow run "${wf}.yml" --ref "$branch" \
-                || echo "::warning::Failed to dispatch ${wf}.yml against $branch ($name) — required check may be missing on its PR"
+              if ! gh workflow run "${wf}.yml" --ref "$branch"; then
+                echo "::error::Failed to dispatch ${wf}.yml against $branch ($name) — required check will be missing; re-dispatch with: gh workflow run ${wf}.yml --ref $branch"
+                echo "${wf} ${branch}" >> "$dispatch_failures"
+              fi
             done
           done
+          if [ -s "$dispatch_failures" ]; then
+            echo "::error::$(wc -l < "$dispatch_failures" | tr -d ' ') required-check dispatch(es) failed; the affected bump PR(s) are blocked until re-dispatched (see annotations above)."
+            exit 1
+          fi
