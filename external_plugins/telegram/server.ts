@@ -516,6 +516,22 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
   ],
 }))
 
+// --- typing keepalive (fork patch) ---
+const typingTimers = new Map()
+function startTyping(chat_id) {
+  stopTyping(chat_id)
+  void bot.api.sendChatAction(chat_id, 'typing').catch(() => {})
+  const iv = setInterval(() => { void bot.api.sendChatAction(chat_id, 'typing').catch(() => {}) }, 4000)
+  const cap = setTimeout(() => stopTyping(chat_id), 300000)
+  typingTimers.set(String(chat_id), { iv, cap })
+}
+function stopTyping(chat_id) {
+  const t = typingTimers.get(String(chat_id))
+  if (!t) return
+  clearInterval(t.iv); clearTimeout(t.cap); typingTimers.delete(String(chat_id))
+}
+// --- end typing keepalive ---
+
 mcp.setRequestHandler(CallToolRequestSchema, async req => {
   const args = (req.params.arguments ?? {}) as Record<string, unknown>
   try {
@@ -529,6 +545,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         const parseMode = format === 'markdownv2' ? 'MarkdownV2' as const : undefined
 
         assertAllowedChat(chat_id)
+        stopTyping(chat_id)
 
         for (const f of files) {
           assertSendable(f)
@@ -943,7 +960,7 @@ async function handleInbound(
   }
 
   // Typing indicator — signals "processing" until we reply (or ~5s elapses).
-  void bot.api.sendChatAction(chat_id, 'typing').catch(() => {})
+  startTyping(chat_id)
 
   // Ack reaction — lets the user know we're processing. Fire-and-forget.
   // Telegram only accepts a fixed emoji whitelist — if the user configures
